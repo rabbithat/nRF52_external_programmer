@@ -1,0 +1,96 @@
+#13 constant ASCII_cr
+#10 constant ASCII_lf
+#96 constant ASCII_graveAccent
+#126 constant ASCII_tilde
+
+
+\ $40028000 UARTE UARTE1
+$40028000 constant NRF_UARTE1__TASKS_STARTRX
+$40028008 constant NRF_UARTE1__TASKS_STARTTX
+$4002802C constant NRF_UARTE1__TASKS_FLUSHRX
+$40028108 constant NRF_UARTE1__EVENTS_RXDRDY
+$40028110 constant NRF_UARTE1__EVENTS_ENDRX
+$4002811C constant NRF_UARTE1__EVENTS_TXDRDY
+$40028120 constant NRF_UARTE1__EVENTS_ENDTX
+$4002814C constant NRF_UARTE1__EVENTS_RXSTARTED
+$40028150 constant NRF_UARTE1__EVENTS_TXSTARTED
+$40028158 constant NRF_UARTE1__EVENTS_TXSTOPPED
+$40028500 constant NRF_UARTE1__ENABLE
+$4002850C constant NRF_UARTE1__PSEL.TXD
+$40028514 constant NRF_UARTE1__PSEL.RXD
+$40028524 constant NRF_UARTE1__BAUDRATE
+$40028534 constant NRF_UARTE1__RXD.PTR
+$40028538 constant NRF_UARTE1__RXD.MAXCNT
+$40028544 constant NRF_UARTE1__TXD.PTR
+$40028548 constant NRF_UARTE1__TXD.MAXCNT
+$4002856C constant NRF_UARTE1__CONFIG
+
+$01D60000 constant Baud115200 \ used for setting the baudrate
+
+\ 256 buffer: UARTE1_rxBuf
+\ 256 buffer: UARTE1_txBuf
+0 variable UARTE1_rxBuf
+0 variable UARTE1_txBuf
+
+
+: UARTE1__initBaudRate Baud115200 NRF_UARTE1__BAUDRATE ! ;  \ set baudrate to 115,200
+
+\ Set pin P0.04 to be the UARTE1 RXD pin and rx buffer to be 1 byte long.
+: UARTE1__initRx  UARTE1_rxBuf NRF_UARTE1__RXD.PTR ! 1 NRF_UARTE1__RXD.MAXCNT ! #4 NRF_UARTE1__PSEL.RXD ! ;
+
+\ Set pin P0.03 to be the UARTE1 TXD pin and tx buffer to be 1 byte long.
+: UARTE1__initTx  UARTE1_txBuf NRF_UARTE1__TXD.PTR ! 1 NRF_UARTE1__TXD.MAXCNT ! #3  NRF_UARTE1__PSEL.TXD ! ;
+
+: UARTE1__enable #8 NRF_UARTE1__ENABLE ! ; \ enable UARTE1
+
+: UARTE1__disable 0 NRF_UARTE1__ENABLE ! ; \ disable UARTE1
+
+: UARTE1__initialize UARTE1__initBaudRate UARTE1__initRx UARTE1__initTx UARTE1__enable ;
+
+( char  --  )
+: UARTE1__txChar  UARTE1_txBuf ! 0 NRF_UARTE1__EVENTS_ENDTX ! 1 NRF_UARTE1__TASKS_STARTTX ! begin NRF_UARTE1__EVENTS_ENDTX @ until ;
+
+(  --  char )
+: UARTE1__rxChar 0 NRF_UARTE1__EVENTS_ENDRX ! 1 NRF_UARTE1__TASKS_STARTRX ! begin NRF_UARTE1__EVENTS_ENDRX @ until UARTE1_rxBuf @ ;
+
+
+
+: repeatingChar UARTE1__initialize begin [char] X UARTE1__txChar again ;
+
+: rc repeatingChar ;
+
+( char -- )
+\ : UARTE1__emitChar dup UARTE1__txChar ASCII_cr = if ASCII_lf emit UARTE1__txChar then ;
+: UARTE1__emitChar UARTE1__txChar ;
+
+: UARTE1__echo begin UARTE1__rxChar dup UARTE1__emitChar ASCII_graveAccent = until ;
+
+: ec UARTE1__initialize UARTE1__echo ;
+
+\ keep receiving characters until an ASCII_lf is received
+: UARTE1__waitFor_lf begin UARTE1__rxChar dup emit 200 delay_msec ASCII_lf = until ;
+
+: UARTE1__getAndFlushChar UARTE1__rxChar emit ;
+
+0 variable timeOfLastChar \ the clock tick that the last char was received
+
+\ the clock tick after which one should stop waiting to receive another char
+0 variable timeToStopWaitingForRxChar 
+
+250 constant maxClockTicksToWaitForRxChar
+
+: setTimeLimit NRF_RTC__COUNTER @ maxClockTicksToWaitForRxChar + timeToStopWaitingForRxChar ! ;
+
+: timeLimitExpired? NRF_RTC__COUNTER @ timeToStopWaitingForRxChar @ >= ;
+
+: startReceiving setTimeLimit 0 NRF_UARTE1__EVENTS_ENDRX ! 1 NRF_UARTE1__TASKS_STARTRX ! ;
+
+: UARTE1__getAnyChars  startReceiving begin NRF_UARTE1__EVENTS_ENDRX @ if UARTE1_rxBuf @ emit startReceiving false else timeLimitExpired? if true else false then then until ;
+
+\ upload the contents of dlBuf to the target, waiting at the end of each line 
+\ for an ASCII_lf before proceeding
+
+: UARTE1__program dlBuf_numChars @ 0 do i dlBuf ivList@b UARTE1__emitChar UARTE1__getAnyChars loop ;
+
+: prog UARTE1__initialize initializeRtc startRtc UARTE1__program ;
+
